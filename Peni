@@ -1,0 +1,226 @@
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(
+    page_title="Pocket Option V5",
+    page_icon="📈",
+    layout="wide"
+)
+
+st.title("📈 Pocket Option V5")
+st.caption("EMA + RSI strategy backtester — demo/testing only")
+
+# Settings
+st.sidebar.header("Strategy Settings")
+
+ema_period = st.sidebar.number_input(
+    "EMA Period",
+    min_value=2,
+    max_value=200,
+    value=20
+)
+
+rsi_period = st.sidebar.number_input(
+    "RSI Period",
+    min_value=2,
+    max_value=50,
+    value=14
+)
+
+expiry = st.sidebar.number_input(
+    "Expiry (minutes)",
+    min_value=1,
+    max_value=60,
+    value=5
+)
+
+stake = st.sidebar.number_input(
+    "Demo Stake",
+    min_value=1.0,
+    value=10.0
+)
+
+payout = st.sidebar.slider(
+    "Payout %",
+    min_value=50,
+    max_value=100,
+    value=80
+)
+
+daily_loss_limit = st.sidebar.number_input(
+    "Daily Loss Limit",
+    min_value=1.0,
+    value=50.0
+)
+
+st.subheader("Upload price data")
+
+uploaded_file = st.file_uploader(
+    "Upload a CSV containing time, open, high, low and close",
+    type=["csv"]
+)
+
+if uploaded_file is None:
+    st.info("Upload a CSV to run the backtest.")
+    st.markdown("""
+### Expected CSV columns
+
+Your CSV should contain:
+
+- `time`
+- `open`
+- `high`
+- `low`
+- `close`
+""")
+    st.stop()
+
+df = pd.read_csv(uploaded_file)
+
+required = ["open", "high", "low", "close"]
+
+missing = [col for col in required if col not in df.columns]
+
+if missing:
+    st.error(f"Missing columns: {', '.join(missing)}")
+    st.stop()
+
+# Convert prices
+for col in required:
+    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+df = df.dropna(subset=required).reset_index(drop=True)
+
+# EMA
+df["EMA"] = df["close"].ewm(
+    span=ema_period,
+    adjust=False
+).mean()
+
+# RSI
+delta = df["close"].diff()
+
+gain = delta.clip(lower=0)
+loss = -delta.clip(upper=0)
+
+avg_gain = gain.rolling(rsi_period).mean()
+avg_loss = loss.rolling(rsi_period).mean()
+
+rs = avg_gain / avg_loss.replace(0, 1e-10)
+
+df["RSI"] = 100 - (100 / (1 + rs))
+
+# Signals
+df["Signal"] = ""
+
+df.loc[
+    (df["close"] > df["EMA"]) & (df["RSI"] >= 50),
+    "Signal"
+] = "CALL"
+
+df.loc[
+    (df["close"] < df["EMA"]) & (df["RSI"] < 50),
+    "Signal"
+] = "PUT"
+
+# Backtest
+trades = []
+balance = 1000.0
+starting_balance = balance
+loss_today = 0.0
+
+for i in range(len(df) - expiry):
+    signal = df.loc[i, "Signal"]
+
+    if signal == "":
+        continue
+
+    if loss_today >= daily_loss_limit:
+        break
+
+    entry = df.loc[i, "close"]
+    exit_price = df.loc[i + expiry, "close"]
+
+    if signal == "CALL":
+        win = exit_price > entry
+    else:
+        win = exit_price < entry
+
+    if win:
+        profit = stake * payout / 100
+        balance += profit
+    else:
+        profit = -stake
+        balance += profit
+        loss_today += stake
+
+    trades.append({
+        "Index": i,
+        "Signal": signal,
+        "Entry": entry,
+        "Exit": exit_price,
+        "Result": "WIN" if win else "LOSS",
+        "Profit": profit,
+        "Balance": balance
+    })
+
+results = pd.DataFrame(trades)
+
+if results.empty:
+    st.warning("No trades were generated from this data.")
+    st.stop()
+
+# Statistics
+total_trades = len(results)
+wins = (results["Result"] == "WIN").sum()
+losses = (results["Result"] == "LOSS").sum()
+
+win_rate = wins / total_trades * 100
+net_profit = balance - starting_balance
+
+results["Peak"] = results["Balance"].cummax()
+results["Drawdown"] = results["Peak"] - results["Balance"]
+
+max_drawdown = results["Drawdown"].max()
+
+# Display
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric("Trades", total_trades)
+c2.metric("Win Rate", f"{win_rate:.2f}%")
+c3.metric("Net Profit", f"${net_profit:.2f}")
+c4.metric("Max Drawdown", f"${max_drawdown:.2f}")
+
+st.subheader("Balance")
+
+chart_data = results.set_index("Index")["Balance"]
+st.line_chart(chart_data)
+
+st.subheader("Trade History")
+
+st.dataframe(
+    results[
+        [
+            "Signal",
+            "Entry",
+            "Exit",
+            "Result",
+            "Profit",
+            "Balance"
+        ]
+    ],
+    use_container_width=True
+)
+
+csv = results.to_csv(index=False)
+
+st.download_button(
+    "⬇️ Download Trade Results",
+    csv,
+    "pocket_option_results.csv",
+    "text/csv"
+)
+
+st.caption(
+    "This is a backtesting/demo tool. It does not place live trades."
+)
