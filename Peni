@@ -122,24 +122,7 @@ df.loc[
     (df["close"] < df["EMA"]) & (df["RSI"] < 50),
     "Signal"
 ] = "PUT"
-# Signal arrows on chart
-fig.add_trace(go.Scatter(
-    x=df.index[df["Signal"] == "CALL"],
-    y=df.loc[df["Signal"] == "CALL", "low"] * 0.999,
-    mode="markers+text",
-    marker=dict(symbol="arrow-up", size=14),
-    text="CALL",
-    textposition="bottom center",
-    name="CALL"
-))
 
-fig.add_trace(go.Scatter(
-    x=df.index[df["Signal"] == "PUT"],
-    y=df.loc[df["Signal"] == "PUT", "high"] * 1.001,
-    mode="markers+text",
-    marker=dict(symbol="arrow-down", size=14),
-    text="PUT",
-    textposition="top center",
  
 ))
 # Backtest
