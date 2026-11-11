@@ -1,201 +1,146 @@
-import io
-import numpy as np
-import pandas as pd
 import streamlit as st
-import plotly.express as px
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Pocket Option V5 Backtester", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Pocket Option Analysis Bot", page_icon="📊", layout="wide")
 
-REQUIRED = ["timestamp", "market", "open", "high", "low", "close"]
+st.title("📊 Pocket Option — Analysis Dashboard")
+st.caption("Analysis/demo only • No broker connection • No automatic trading or real-money execution")
 
-def sample_data(n=20000, markets=("EURUSD", "GBPUSD", "USDJPY"), seed=7):
-    rng = np.random.default_rng(seed)
-    rows = []
-    start = pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
-    for m_i, market in enumerate(markets):
-        t = pd.date_range(start + pd.Timedelta(hours=m_i*2), periods=n, freq="1s")
-        base = 1.08 + m_i * 0.25
-        returns = rng.normal(0, 0.00006, n)
-        # Add mild changing drift so the sample is not perfectly random.
-        drift = 0.000012 * np.sin(np.arange(n) / 900)
-        close = base * np.exp(np.cumsum(returns + drift))
-        close = close / close[0] * base
-        op = np.r_[close[0], close[:-1]]
-        wiggle = np.abs(rng.normal(0, 0.000025, n))
-        high = np.maximum(op, close) + wiggle
-        low = np.minimum(op, close) - wiggle
-        rows.append(pd.DataFrame({
-            "timestamp": t,
-            "market": market,
-            "open": op, "high": high, "low": low, "close": close
-        }))
-    return pd.concat(rows, ignore_index=True)
+st.warning(
+    "This dashboard does not connect to Pocket Option and cannot read its live chart. "
+    "Use a CSV containing historical candles, or the clearly labelled sample data. "
+    "Signals are educational indicators, not guaranteed trade instructions."
+)
 
-def normalize(df):
+def make_sample_data(rows=300, seconds=5):
+    end = datetime.utcnow()
+    times = [end - timedelta(seconds=seconds * (rows - 1 - i)) for i in range(rows)]
+    rng = np.random.default_rng(7)
+    changes = rng.normal(0, 0.00035, rows)
+    close = 1.085 + np.cumsum(changes)
+    open_ = np.r_[close[0], close[:-1]]
+    spread = rng.uniform(0.00005, 0.00025, rows)
+    high = np.maximum(open_, close) + spread
+    low = np.minimum(open_, close) - spread
+    return pd.DataFrame({"time": times, "open": open_, "high": high, "low": low, "close": close})
+
+def clean_data(df):
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
-    missing = [c for c in REQUIRED if c not in df.columns]
+    aliases = {"timestamp": "time", "date": "time", "datetime": "time",
+               "o": "open", "h": "high", "l": "low", "c": "close"}
+    df = df.rename(columns=aliases)
+    required = ["open", "high", "low", "close"]
+    missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError("Missing columns: " + ", ".join(missing))
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
-    for c in ["open","high","low","close"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["market"] = df["market"].astype(str)
-    if "payout" in df:
-        df["payout"] = pd.to_numeric(df["payout"], errors="coerce")
+        raise ValueError("CSV must contain open, high, low and close columns.")
+    if "time" not in df.columns:
+        df["time"] = np.arange(len(df))
     else:
-        df["payout"] = 0.80
-    df = df.dropna(subset=REQUIRED).sort_values(["market","timestamp"]).reset_index(drop=True)
+        parsed = pd.to_datetime(df["time"], errors="coerce", utc=True)
+        df["time"] = parsed.where(parsed.notna(), df["time"].astype(str))
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=required).reset_index(drop=True)
+    if len(df) < 30:
+        raise ValueError("Please provide at least 30 valid candle rows.")
     return df
 
-def backtest(df, fast=9, slow=21, expiry=60, stake=10, starting_balance=1000, payout=0.80, cooldown=0):
-    trades = []
-    for market, g in df.groupby("market", sort=False):
-        g = g.sort_values("timestamp").reset_index(drop=True).copy()
-        g["ema_fast"] = g["close"].ewm(span=fast, adjust=False).mean()
-        g["ema_slow"] = g["close"].ewm(span=slow, adjust=False).mean()
-        prev_fast = g["ema_fast"].shift(1)
-        prev_slow = g["ema_slow"].shift(1)
-        up = (g["ema_fast"] > g["ema_slow"]) & (prev_fast <= prev_slow)
-        down = (g["ema_fast"] < g["ema_slow"]) & (prev_fast >= prev_slow)
-        signal_idx = np.flatnonzero((up | down).fillna(False).to_numpy())
-        last_end = -1
-        for i in signal_idx:
-            if i <= last_end or i + expiry >= len(g):
-                continue
-            direction = "UP" if bool(up.iloc[i]) else "DOWN"
-            entry = float(g.loc[i, "close"])
-            exit_i = i + expiry
-            exit_price = float(g.loc[exit_i, "close"])
-            win = exit_price > entry if direction == "UP" else exit_price < entry
-            p = float(g.loc[i, "payout"]) if np.isfinite(g.loc[i, "payout"]) else payout
-            if p > 1: p /= 100
-            profit = stake * p if win else -stake
-            trades.append({
-                "timestamp": g.loc[i, "timestamp"], "market": market,
-                "direction": direction, "entry": entry, "exit": exit_price,
-                "expiry_seconds": expiry, "stake": stake, "payout": p,
-                "result": "WIN" if win else "LOSS", "profit": profit
-            })
-            last_end = exit_i + cooldown
-    t = pd.DataFrame(trades)
-    if t.empty:
-        return t
-    t = t.sort_values("timestamp").reset_index(drop=True)
-    t["balance"] = starting_balance + t["profit"].cumsum()
-    t["hour"] = t["timestamp"].dt.hour
-    t["date"] = t["timestamp"].dt.date.astype(str)
-    return t
-
-def max_losing_streak(results):
-    best = cur = 0
-    for x in results:
-        if x == "LOSS":
-            cur += 1
-            best = max(best, cur)
-        else:
-            cur = 0
-    return best
-
-st.title("📊 Pocket Option V5 — Cloud Backtester")
-st.caption("Mobile-friendly historical backtesting. This version analyzes CSV data; it does not place live trades.")
-
 with st.sidebar:
-    st.header("⚙️ Strategy")
-    fast = st.number_input("Fast EMA", 2, 200, 9)
-    slow = st.number_input("Slow EMA", 3, 400, 21)
-    expiry = st.number_input("Expiry (seconds)", 1, 3600, 60)
-    stake = st.number_input("Stake per trade", 0.01, 100000.0, 10.0, step=1.0)
-    starting = st.number_input("Starting balance", 0.0, 10000000.0, 1000.0, step=100.0)
-    payout_default = st.number_input("Default payout", 0.01, 2.0, 0.80, step=0.01)
-    cooldown = st.number_input("Cooldown after trade (seconds)", 0, 3600, 0)
-    st.divider()
-    st.write("**CSV columns:** timestamp, market, open, high, low, close; optional payout.")
+    st.header("Settings")
+    fast = st.number_input("Fast EMA", min_value=2, max_value=50, value=9)
+    slow = st.number_input("Slow EMA", min_value=3, max_value=200, value=21)
+    rsi_period = st.number_input("RSI period", min_value=2, max_value=50, value=14)
+    st.caption("Signals are generated only from the uploaded or sample candle data.")
 
-st.subheader("1. Load historical data")
-uploaded = st.file_uploader("Upload CSV", type=["csv"])
-
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🧪 Generate sample 1-second CSV", use_container_width=True):
-        s = sample_data()
-        st.session_state["data"] = s
-        st.success(f"Generated {len(s):,} sample rows.")
-with col2:
-    if st.button("🗑️ Clear data", use_container_width=True):
-        st.session_state.pop("data", None)
-        st.session_state.pop("results", None)
-        st.rerun()
-
-if uploaded:
+source = st.radio("Choose data source", ["Sample demo data", "Upload candle CSV"], horizontal=True)
+if source == "Upload candle CSV":
+    uploaded = st.file_uploader("Upload CSV candles", type=["csv"])
+    if uploaded is None:
+        st.info("Upload a CSV with columns: time (optional), open, high, low, close.")
+        st.stop()
     try:
-        st.session_state["data"] = normalize(pd.read_csv(uploaded))
-        st.success(f"Loaded {len(st.session_state['data']):,} rows.")
-    except Exception as e:
-        st.error(str(e))
+        raw = clean_data(pd.read_csv(uploaded))
+        source_label = "Uploaded CSV"
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+else:
+    raw = make_sample_data()
+    source_label = "SAMPLE DATA — NOT LIVE MARKET DATA"
 
-df = st.session_state.get("data")
-if df is None:
-    st.info("Upload a CSV or generate the sample data to begin.")
+if fast >= slow:
+    st.error("Fast EMA must be smaller than Slow EMA.")
     st.stop()
 
-st.write(f"**Rows:** {len(df):,}  |  **Markets:** {df['market'].nunique()}  |  **From:** {df['timestamp'].min()}  |  **To:** {df['timestamp'].max()}")
-st.dataframe(df.head(10), use_container_width=True)
+df = raw.copy()
+df["ema_fast"] = df["close"].ewm(span=int(fast), adjust=False).mean()
+df["ema_slow"] = df["close"].ewm(span=int(slow), adjust=False).mean()
 
-st.subheader("2. Run V5 backtest")
-if st.button("▶️ Run Backtest", type="primary", use_container_width=True):
-    if fast >= slow:
-        st.error("Fast EMA must be smaller than Slow EMA.")
-    else:
-        st.session_state["results"] = backtest(df, fast, slow, expiry, stake, starting, payout_default, cooldown)
+delta = df["close"].diff()
+gain = delta.clip(lower=0).ewm(alpha=1 / int(rsi_period), adjust=False).mean()
+loss = (-delta.clip(upper=0)).ewm(alpha=1 / int(rsi_period), adjust=False).mean()
+rs = gain / loss.replace(0, np.nan)
+df["rsi"] = (100 - (100 / (1 + rs))).fillna(50)
 
-t = st.session_state.get("results")
-if t is None:
-    st.stop()
-if t.empty:
-    st.warning("No trades were generated. Try different EMA settings or more data.")
-    st.stop()
+df["signal"] = "WAIT"
+cross_up = (df["ema_fast"] > df["ema_slow"]) & (df["ema_fast"].shift(1) <= df["ema_slow"].shift(1))
+cross_down = (df["ema_fast"] < df["ema_slow"]) & (df["ema_fast"].shift(1) >= df["ema_slow"].shift(1))
+df.loc[cross_up & (df["rsi"] < 70), "signal"] = "CALL"
+df.loc[cross_down & (df["rsi"] > 30), "signal"] = "PUT"
 
-wins = int((t.result == "WIN").sum())
-losses = int((t.result == "LOSS").sum())
-total = len(t)
-winrate = wins / total * 100
-net = float(t.profit.sum())
-final_balance = float(t.balance.iloc[-1])
-avg = float(t.profit.mean())
-streak = max_losing_streak(t.result.tolist())
-peak = t.balance.cummax()
-drawdown = t.balance - peak
-max_dd = float(drawdown.min())
+last = df.iloc[-1]
+previous = df.iloc[-2]
+latest_signal = last["signal"]
+signal_color = "green" if latest_signal == "CALL" else ("red" if latest_signal == "PUT" else "gray")
 
-st.subheader("3. Results")
-metrics = st.columns(7)
-metrics[0].metric("Trades", f"{total:,}")
-metrics[1].metric("Wins", f"{wins:,}")
-metrics[2].metric("Losses", f"{losses:,}")
-metrics[3].metric("Win rate", f"{winrate:.2f}%")
-metrics[4].metric("Net P/L", f"{net:+,.2f}")
-metrics[5].metric("Max losing streak", f"{streak}")
-metrics[6].metric("Max drawdown", f"{max_dd:,.2f}")
+st.subheader(source_label)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Latest close", f'{last["close"]:.5f}')
+c2.metric("Fast EMA", f'{last["ema_fast"]:.5f}')
+c3.metric("Slow EMA", f'{last["ema_slow"]:.5f}')
+c4.metric("RSI", f'{last["rsi"]:.1f}')
 
-fig = px.line(t, x="timestamp", y="balance", title="Balance / Equity Curve")
+st.markdown(f"### Latest signal: :{signal_color}[{latest_signal}]")
+st.caption("A signal appears only when the fast EMA crosses the slow EMA and RSI passes the simple filter. WAIT means no new crossover on the latest candle.")
+
+fig = go.Figure()
+fig.add_trace(go.Candlestick(
+    x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+    name="Candles"
+))
+fig.add_trace(go.Scatter(x=df["time"], y=df["ema_fast"], name=f"EMA {fast}", line=dict(width=1.5)))
+fig.add_trace(go.Scatter(x=df["time"], y=df["ema_slow"], name=f"EMA {slow}", line=dict(width=1.5)))
+calls = df[df["signal"] == "CALL"]
+puts = df[df["signal"] == "PUT"]
+fig.add_trace(go.Scatter(x=calls["time"], y=calls["low"], mode="markers", name="CALL",
+                         marker=dict(symbol="triangle-up", size=11)))
+fig.add_trace(go.Scatter(x=puts["time"], y=puts["high"], mode="markers", name="PUT",
+                         marker=dict(symbol="triangle-down", size=11)))
+fig.update_layout(height=560, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
 st.plotly_chart(fig, use_container_width=True)
 
-c1, c2 = st.columns(2)
-with c1:
-    hourly = t.groupby("hour").agg(trades=("profit","size"), net_pnl=("profit","sum"), win_rate=("result", lambda x: (x=="WIN").mean()*100)).reset_index()
-    st.subheader("Hourly performance")
-    st.dataframe(hourly.round(2), use_container_width=True)
-    st.plotly_chart(px.bar(hourly, x="hour", y="net_pnl", title="Net P/L by Hour"), use_container_width=True)
-with c2:
-    market = t.groupby("market").agg(trades=("profit","size"), net_pnl=("profit","sum"), win_rate=("result", lambda x: (x=="WIN").mean()*100)).reset_index()
-    st.subheader("Market performance")
-    st.dataframe(market.round(2), use_container_width=True)
-    st.plotly_chart(px.bar(market, x="market", y="net_pnl", title="Net P/L by Market"), use_container_width=True)
+st.subheader("Signal history")
+history = df[df["signal"].isin(["CALL", "PUT"])][["time", "close", "signal", "ema_fast", "ema_slow", "rsi"]].tail(30)
+if history.empty:
+    st.info("No EMA crossover signals found in this data set.")
+else:
+    st.dataframe(history.iloc[::-1], use_container_width=True, hide_index=True)
 
-st.subheader("Trade history")
-st.dataframe(t, use_container_width=True)
-csv = t.to_csv(index=False).encode()
-st.download_button("⬇️ Download trade results CSV", csv, "v5_trade_results.csv", "text/csv", use_container_width=True)
+st.subheader("Simple historical signal count")
+counts = df["signal"].value_counts()
+m1, m2, m3 = st.columns(3)
+m1.metric("CALL signals", int(counts.get("CALL", 0)))
+m2.metric("PUT signals", int(counts.get("PUT", 0)))
+m3.metric("WAIT candles", int(counts.get("WAIT", 0)))
 
-st.caption("Backtests depend on the supplied historical data, assumptions, payout, execution model and strategy rules. They do not guarantee future results.")
+csv = df.to_csv(index=False).encode("utf-8")
+st.download_button("Download analysed candles (CSV)", data=csv, file_name="pocket_option_analysis.csv", mime="text/csv")
+
+st.caption(
+    "Important: Sample data is synthetic. This app does not provide verified 5-second Pocket Option prices, "
+    "does not calculate a reliable win rate, and does not place trades. Test any strategy independently on a demo account."
+)
