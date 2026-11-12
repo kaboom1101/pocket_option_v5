@@ -144,10 +144,21 @@ df.loc[cross_up & (df["rsi"] < 70), "signal"] = "CALL"
 df.loc[cross_down & (df["rsi"] > 30), "signal"] = "PUT"
 
 last = df.iloc[-1]
-previous = df.iloc[-2]
 latest_signal = last["signal"]
-signal_color = "green" if latest_signal == "CALL" else ("red" if latest_signal == "PUT" else "gray")
 
+signal_time = str(last["time"])
+
+st.subheader("🚨 V6 SIGNAL ALERT")
+
+if latest_signal == "CALL":
+    st.success("🟢 CALL ⬆️ — Signal detected")
+elif latest_signal == "PUT":
+    st.error("🔴 PUT ⬇️ — Signal detected")
+else:
+    st.info("⏳ WAIT — No new signal")
+
+st.write(f"Signal time: {signal_time}")
+st.write(f"Latest price: {last['close']:.5f}")
 st.subheader(source_label)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Latest close", f'{last["close"]:.5f}')
