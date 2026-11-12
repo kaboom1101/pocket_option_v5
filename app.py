@@ -164,7 +164,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Latest close", f'{last["close"]:.5f}')
 c2.metric("Fast EMA", f'{last["ema_fast"]:.5f}')
 c3.metric("Slow EMA", f'{last["ema_slow"]:.5f}')
-c4.metric("RSI", 
+c4.metric("RSI", f'{last["rsi"]:.1f}')
 st.caption("A signal appears only when the fast EMA crosses the slow EMA and RSI passes the simple filter. WAIT means no new crossover on the latest candle.")
 st.markdown(f"### Latest signal: {latest_signal}")
 fig = go.Figure()
