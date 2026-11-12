@@ -14,8 +14,8 @@ st.caption("Analysis/demo only • No broker connection • No automatic trading
 st.warning(
     "This dashboard does not connect to Pocket Option and cannot read its live chart. "
     "Use a CSV containing historical candles, or the clearly labelled sample data. "
-    "Signals are educational indicators, not guaranteed trade instructions."
-)
+    "Signals are educational indicators, not guaranteed trade instructions.")
+
 def get_twelvedata_data(symbol="EUR/USD", interval="1min", outputsize=300):
     api_key = st.secrets.get("TWELVE_DATA_API_KEY", "")
 
