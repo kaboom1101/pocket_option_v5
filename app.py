@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+from twelvedata import TDClient
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
