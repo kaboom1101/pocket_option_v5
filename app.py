@@ -16,7 +16,40 @@ st.warning(
     "Use a CSV containing historical candles, or the clearly labelled sample data. "
     "Signals are educational indicators, not guaranteed trade instructions."
 )
+def get_twelvedata_data(symbol="EUR/USD", interval="1min", outputsize=300):
+    api_key = st.secrets.get("TWELVE_DATA_API_KEY", "")
 
+    if not api_key:
+        raise ValueError("Twelve Data API key is missing.")
+
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "outputsize": outputsize,
+        "apikey": api_key
+    }
+
+    response = requests.get(
+        "https://api.twelvedata.com/time_series",
+        params=params,
+        timeout=20
+    )
+
+    data = response.json()
+
+    if "values" not in data:
+        raise ValueError(data.get("message", "Unable to get market data."))
+
+    df = pd.DataFrame(data["values"])
+    df = df.rename(columns={"datetime": "time"})
+
+    for col in ["open", "high", "low", "close"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    df = df.sort_values("time").reset_index(drop=True)
+
+    return df
 def make_sample_data(rows=300, seconds=5):
     end = datetime.utcnow()
     times = [end - timedelta(seconds=seconds * (rows - 1 - i)) for i in range(rows)]
