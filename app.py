@@ -91,11 +91,16 @@ with st.sidebar:
     rsi_period = st.number_input("RSI period", min_value=2, max_value=50, value=14)
     st.caption("Signals are generated only from the uploaded or sample candle data.")
 
-source = st.radio("Choose data source", ["Sample demo data", "Upload candle CSV"], horizontal=True)
+source = st.radio(
+    "Choose data source",
+    ["Sample demo data", "Upload candle CSV", "Twelve Data live market data"],
+    horizontal=True
+)
+
 if source == "Upload candle CSV":
     uploaded = st.file_uploader("Upload CSV candles", type=["csv"])
     if uploaded is None:
-        st.info("Upload a CSV with columns: time (optional), open, high, low, close.")
+        st.info("Upload a CSV with columns: time, open, high, low, close.")
         st.stop()
     try:
         raw = clean_data(pd.read_csv(uploaded))
@@ -103,6 +108,17 @@ if source == "Upload candle CSV":
     except Exception as exc:
         st.error(str(exc))
         st.stop()
+
+elif source == "Twelve Data live market data":
+    symbol = st.selectbox("Market", ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD"])
+    interval = st.selectbox("Candle interval", ["1min", "5min", "15min"])
+    try:
+        raw = clean_data(get_twelvedata_data(symbol, interval))
+        source_label = f"TWELVE DATA — {symbol} — {interval}"
+    except Exception as exc:
+        st.error(f"Market data error: {exc}")
+        st.stop()
+
 else:
     raw = make_sample_data()
     source_label = "SAMPLE DATA — NOT LIVE MARKET DATA"
