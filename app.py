@@ -160,9 +160,6 @@ else:
     st.info("🟡 WAIT — No new crossover signal")
 
 st.write(f"Signal time: {signal_time}")
-st.write(f"Latest price: {latest_price:.5f}")
-
-st.write(f"Signal time: {signal_time}")
 st.write(f"Latest price: {last['close']:.5f}")
 st.subheader(source_label)
 c1, c2, c3, c4 = st.columns(4)
