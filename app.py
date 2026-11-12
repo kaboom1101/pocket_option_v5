@@ -145,17 +145,22 @@ df.loc[cross_down & (df["rsi"] > 30), "signal"] = "PUT"
 
 last = df.iloc[-1]
 latest_signal = last["signal"]
-
 signal_time = str(last["time"])
+latest_price = float(last["close"])
 
-st.subheader("🚨 V6 SIGNAL ALERT")
+st.subheader("🚨 V7 BUY / SELL SIGNAL ALERT")
 
 if latest_signal == "CALL":
-    st.success("🟢 CALL ⬆️ — Signal detected")
+    st.success("🟢 BUY / CALL — Bullish crossover detected")
+    st.write("Possible upward direction — check your chart.")
 elif latest_signal == "PUT":
-    st.error("🔴 PUT ⬇️ — Signal detected")
+    st.error("🔴 SELL / PUT — Bearish crossover detected")
+    st.write("Possible downward direction — check your chart.")
 else:
-    st.info("⏳ WAIT — No new signal")
+    st.info("🟡 WAIT — No new crossover signal")
+
+st.write(f"Signal time: {signal_time}")
+st.write(f"Latest price: {latest_price:.5f}")
 
 st.write(f"Signal time: {signal_time}")
 st.write(f"Latest price: {last['close']:.5f}")
